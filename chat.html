@@ -242,6 +242,14 @@ function renderContent(text) {
   return html;
 }
 
+// 推理模型会把思考过程放进 <think>…</think>：显示与写入上下文时都去掉它，
+// 避免思考文本污染对话历史（导致下一轮答非所问 / 重复上一题），也用于判断"是否还在思考"
+function splitThink(t) {
+  let s = t.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  if (/<think>/i.test(s)) s = s.replace(/<think>[\s\S]*$/i, '');   // 仍在思考（只有<think>没有</think>）
+  return { text: s.trim() };
+}
+
 function renderMessages() {
   const msgs = getCurrentMessages();
   if (msgs.length === 0) {
@@ -340,6 +348,9 @@ async function send() {
     aiDiv.innerHTML = '<div class="bubble"></div><div class="msg-time">' + now() + '</div>';
     chatEl.appendChild(aiDiv);
     const bubble = aiDiv.querySelector('.bubble');
+    const TYPING = '<div class="typing"><span></span><span></span><span></span></div>';
+    bubble.innerHTML = TYPING;          // 收到正文前一直显示等待动画（含模型"思考"阶段）
+    scrollEnd();
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -361,15 +372,21 @@ async function send() {
           const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
           if (delta) {
             fullText += delta;
-            bubble.innerHTML = renderContent(fullText);
+            const cut = splitThink(fullText);
+            bubble.innerHTML = cut.text ? renderContent(cut.text) : TYPING;  // 仍在 <think> 中则继续显示等待动画
             scrollEnd();
           }
         } catch(e) {}
       }
     }
-    bubble.innerHTML = renderContent(fullText);
+    const finalText = splitThink(fullText).text;
+    if (finalText) {
+      bubble.innerHTML = renderContent(finalText);
+      saveMessage('assistant', finalText);   // 只把"干净的正文"写入上下文；空回复不写入，防止下一轮重复上一题
+    } else {
+      bubble.innerHTML = '⚠️ 模型未返回正文内容';
+    }
     scrollEnd();
-    saveMessage('assistant', fullText);
   } catch(err) {
     typingDiv.remove();
     const errDiv = document.createElement('div');
