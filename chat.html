@@ -354,9 +354,9 @@ async function send() {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let fullText = '', buf = '';
+    let fullText = '', buf = '', streamDone = false;
 
-    while (true) {
+    while (!streamDone) {
       const {done, value} = await reader.read();
       if (done) break;
       buf += decoder.decode(value, {stream: true});
@@ -366,7 +366,7 @@ async function send() {
         const t = line.trim();
         if (!t || !t.startsWith('data: ')) continue;
         const d = t.slice(6);
-        if (d === '[DONE]') continue;
+        if (d === '[DONE]') { streamDone = true; break; }  // 收到结束标记立即停止，不再傻等连接关闭——否则会卡死，下一条发不出去、要刷新页面
         try {
           const j = JSON.parse(d);
           const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
@@ -379,6 +379,7 @@ async function send() {
         } catch(e) {}
       }
     }
+    try { await reader.cancel(); } catch(e) {}   // 主动释放可能仍挂着的连接
     const finalText = splitThink(fullText).text;
     if (finalText) {
       bubble.innerHTML = renderContent(finalText);
@@ -393,11 +394,12 @@ async function send() {
     errDiv.className = 'msg ai';
     errDiv.innerHTML = '<div class="bubble">⚠️ ' + esc(err.message) + '</div>';
     chatEl.appendChild(errDiv);
+  } finally {
+    // 无论成功/出错/流异常，都必须复位，否则 generating 卡在 true 会导致后续永远发不出
+    generating = false;
+    sendBtn.disabled = false;
+    if (!isTouch) inputEl.focus();   // 手机端不自动聚焦，避免每次回复后又弹出键盘
   }
-
-  generating = false;
-  sendBtn.disabled = false;
-  if (!isTouch) inputEl.focus();   // 手机端不自动聚焦，避免每次回复后又弹出键盘、挡住输入框
 }
 
 // ===== 初始化 =====
@@ -416,17 +418,6 @@ async function send() {
   renderMessages();
   if (window.innerWidth <= 600) sidebarEl.classList.add('hidden');
 })();
-
-// 让布局高度跟随「可视视口」：手机弹出键盘时整体收缩，确保输入框/发送键始终在屏内、可继续对话
-function fitViewport() {
-  const vv = window.visualViewport;
-  if (vv) document.body.style.height = vv.height + 'px';
-}
-if (window.visualViewport) {
-  visualViewport.addEventListener('resize', fitViewport);
-  visualViewport.addEventListener('scroll', fitViewport);
-  fitViewport();
-}
 </script>
 </body>
 </html>
