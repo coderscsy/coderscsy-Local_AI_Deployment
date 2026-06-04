@@ -363,6 +363,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         else:
             print(f"  [BRIDGE] 💬 -> LM Studio")
+            headers_sent = False
             try:
                 req = urllib.request.Request(
                     f"{LM_STUDIO_HOST}/v1/chat/completions",
@@ -370,28 +371,40 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     headers={"Content-Type": "application/json"}, method="POST"
                 )
                 resp = urllib.request.urlopen(req, timeout=TIMEOUT)
-                self.send_response(200)
                 ct = resp.headers.get("Content-Type", "application/json")
+                is_stream = "event-stream" in ct
+                self.send_response(200)
                 self.send_header("Content-Type", ct)
-                if "event-stream" in ct:
+                self.send_header("Access-Control-Allow-Origin", "*")
+                # 关键：流结束就关连接（不要 keep-alive），客户端据此退出"生成中"状态、才能继续输入
+                self.send_header("Connection", "close")
+                if is_stream:
                     self.send_header("Cache-Control", "no-cache")
-                    self.send_header("Connection", "keep-alive")
                 else:
                     cl = resp.headers.get("Content-Length")
                     if cl:
                         self.send_header("Content-Length", cl)
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
+                headers_sent = True
+
+                # 按行读取（SSE 是行分隔）：readline 一遇到 \n 就返回，能即时透传、并即时发现 [DONE]，
+                # 不像 read(4096) 会一直阻塞到凑满缓冲或连接关闭（keep-alive 时永远等不到 → 卡死）
                 while True:
-                    chunk = resp.read(4096)
-                    if not chunk:
+                    line = resp.readline()
+                    if not line:
                         break
-                    self.wfile.write(chunk)
+                    self.wfile.write(line)
                     self.wfile.flush()
+                    if is_stream and line.strip() == b"data: [DONE]":   # 结束标记：立即收尾，不再死等连接关闭
+                        break
                 resp.close()
             except Exception as e:
                 print(f"  [ERROR] {e}")
-                self._send({"error": str(e)}, 500)
+                if not headers_sent:                  # headers 未发才能再返回错误状态码，否则只能让连接关闭收尾
+                    try:
+                        self._send({"error": str(e)}, 500)
+                    except Exception:
+                        pass
 
 
 def main():
