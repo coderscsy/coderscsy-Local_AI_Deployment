@@ -27,11 +27,33 @@ os.makedirs(IMAGE_DIR, exist_ok=True)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-IMAGE_KEYWORDS = [
-    "画一张", "画一幅", "画个", "画出", "画", "绘",
-    "生成图片", "生成照片", "生成一张", "生成一幅", "生成一只", "生成一个",
-    "图片生成", "出图", "生图", "帮我画", "给我画", "生成",
-]
+# 中文画图意图：必须出现在消息「开头」（可带「请/帮我/给我」等礼貌前缀）。
+# 不再用「画」「生成」这类裸字做全文子串匹配——否则
+# “帮我优化提示词…画面…图片生成…”“这幅画谁画的”“讲讲生成式模型”“画质太差” 都会误触发。
+# 规则：画/绘 必须后接量词（画一只/画张/画个）；生成/做/出 等通用动词必须后接
+# 图像名词（生成…图片）或「张/幅/只」这类偏图像/动物量词（生成一张/生成一只）。
+_POLITE   = r'(?:(?:请|帮我|帮忙|帮|给我|替我|麻烦你?|能不能|能否|可不可以|可以)\s*)*'
+_QTY      = r'(?:一\s*)?[张幅个只条头份副组片張]'        # 画/绘 用的广义量词
+_IMG_QTY  = r'(?:一\s*)?[张幅只副張]'                    # 生成类用的偏图像/动物量词
+_IMG_NOUN = r'(?:图|图片|照片|图像|画像|插画|插图|海报|头像|壁纸|表情包?|logo|图标|封面|贴纸|二次元)'
+_GEN_VERB = r'(?:生成|制作|做|生|出|搞|整|来)'
+
+ZH_IMAGE_RE = re.compile(
+    r'^[\s，。、：:!！?？.…—\-]*' + _POLITE + r'(?:'
+    r'(?:画出|手绘|绘制)'                                       # 强画图动词，可不带量词
+    r'|[画绘]' + _QTY +                                         # 画/绘 + 量词：画一只 / 画张 / 画个
+    r'|' + _GEN_VERB + _IMG_QTY +                               # 生成一只 / 做一张 / 来一幅
+    r'|' + _GEN_VERB + r'[^。.!?！？\n]{0,12}?' + _IMG_NOUN +   # 生成…图片 / 做个海报
+    r')',
+    re.IGNORECASE,
+)
+
+# 用于从开头剥掉画图指令，得到真正的画面描述
+ZH_PREFIX_RE = re.compile(
+    r'^[\s，。、：:!！?？.…—\-]*' + _POLITE +
+    r'(?:画出|手绘|绘制|[画绘]' + _QTY + r'?|' + _GEN_VERB + _QTY + r'?)\s*',
+    re.IGNORECASE,
+)
 
 # 英文触发：视觉动词(draw/sketch/paint…)单独即可；通用动词(generate/create/make…)
 # 必须后接"图像类名词"才触发，避免 "generate a list" / "create a function" 误触发。
@@ -85,10 +107,10 @@ def is_image_request(text):
     low = text.lower()
     if "create a simple and clear title" in low or "generate a title" in low:
         return False
-    hit = any(kw in text for kw in IMAGE_KEYWORDS) or bool(EN_IMAGE_RE.search(text))
+    hit = bool(ZH_IMAGE_RE.search(text)) or bool(EN_IMAGE_RE.search(text))
     if not hit:
         return False
-    # 只发了关键词、没有实际描述（如"生成"/"画"/"draw"）-> 不触发生图，走普通对话
+    # 只发了指令、没有实际描述（如"画一只"/"生成"/"draw"）-> 不触发生图，走普通对话
     return bool(extract_description(text))
 
 
@@ -120,12 +142,8 @@ def extract_description(text):
         r'(?:of\s+)?',
         '', s, count=1, flags=re.IGNORECASE,
     )
-    # 去掉中文触发词（移除出现的最长的一个）
-    for kw in sorted(IMAGE_KEYWORDS, key=len, reverse=True):
-        idx = s.find(kw)
-        if idx != -1:
-            s = s[:idx] + s[idx + len(kw):]
-            break
+    # 去掉开头的中文画图指令（画一只 / 帮我画个 / 生成一张…），得到真正的描述
+    s = ZH_PREFIX_RE.sub('', s, count=1)
     return s.strip("，,。.：:!！?？ \n\t")
 
 
