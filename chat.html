@@ -66,6 +66,36 @@ select{flex-shrink:1;min-width:0}.btn-s{cursor:pointer;flex-shrink:0}.btn-s:hove
 .input-row textarea::placeholder{color:var(--text2)}
 .send-btn{width:40px;height:40px;background:var(--accent);border:none;border-radius:12px;color:white;font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .send-btn:active{transform:scale(.93)}.send-btn:disabled{opacity:.35}
+
+/* 消息底部操作栏 + 复制 */
+.msg-foot{display:flex;align-items:center;gap:6px;margin-top:4px;padding:0 2px;min-height:16px}
+.msg.user .msg-foot{justify-content:flex-end}
+.msg-copy{background:none;border:none;color:var(--text2);cursor:pointer;padding:3px;border-radius:6px;display:inline-flex;align-items:center;opacity:0;transition:opacity .15s,background .15s,color .15s;-webkit-tap-highlight-color:transparent}
+.msg-copy:hover{background:var(--surface2);color:var(--text)}
+.msg:hover .msg-copy{opacity:1}
+@media(pointer:coarse){.msg-copy{opacity:.5}}
+body.touch .msg-copy{opacity:.55}
+.msg-time{font-size:10px;color:var(--text2)}
+/* Markdown */
+.msg.ai .bubble{white-space:normal}
+.bubble p{margin:0 0 8px}.bubble p:last-child{margin-bottom:0}
+.bubble h1,.bubble h2,.bubble h3{margin:10px 0 6px;line-height:1.3;font-weight:600}
+.bubble h1{font-size:18px}.bubble h2{font-size:16px}.bubble h3{font-size:14.5px}
+.bubble ul,.bubble ol{margin:6px 0;padding-left:20px}.bubble li{margin:2px 0}
+.bubble blockquote{border-left:3px solid var(--border);margin:6px 0;padding:1px 0 1px 10px;color:var(--text2)}
+.bubble hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.bubble strong{font-weight:600}.bubble em{font-style:italic}
+.bubble code.inline{background:rgba(255,255,255,.09);padding:1px 5px;border-radius:5px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9em}
+/* 代码块 */
+.code-block{margin:8px 0;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#0c0c11}
+.code-head{display:flex;justify-content:space-between;align-items:center;padding:5px 10px;background:#15151b;border-bottom:1px solid var(--border);font-size:11px;color:var(--text2)}
+.code-copy{background:none;border:none;color:var(--text2);cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:5px;font-family:inherit;-webkit-tap-highlight-color:transparent}
+.code-copy:hover{background:var(--surface2);color:var(--text)}
+.code-block pre{margin:0;padding:10px 12px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.code-block code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.55;white-space:pre}
+/* 复制提示 */
+#toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%) translateY(8px);background:#26262e;color:var(--text);padding:7px 16px;border-radius:18px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:60;border:1px solid var(--border);box-shadow:0 4px 16px rgba(0,0,0,.3)}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 @media(max-width:600px){.sidebar{width:240px}.sidebar.hidden{transform:translateX(-240px)}.menu-btn{display:block;font-size:18px}.header{padding:6px 10px}.header-left{gap:6px}.logo{width:26px;height:26px;font-size:12px}.h-title{font-size:13px;line-height:1.2}.h-status{font-size:10px;line-height:1.2}select,.btn-s{max-width:110px}}
 </style>
 </head>
@@ -121,6 +151,44 @@ let currentChatId = null;
 let CHATS = {};                      // 内存中的会话数据（唯一可信源），localStorage 仅作持久化
 const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 let storageWarned = false;
+
+// ===== 复制（兼容 HTTP / 非安全上下文——手机经 Tailscale 走的是 http，navigator.clipboard 不可用）=====
+const COPY_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch(e) {}
+  try {                                   // 回退：http 用 execCommand
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch(e) {}
+    const ok = document.execCommand('copy'); ta.remove();
+    return ok;
+  } catch(e) { return false; }
+}
+function toast(m) {
+  let t = document.getElementById('toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.appendChild(t); }
+  t.textContent = m; t.classList.add('show');
+  clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 1400);
+}
+function flashCopy(btn, ok) {
+  if (!btn.dataset.orig) btn.dataset.orig = btn.innerHTML;
+  btn.innerHTML = btn.classList.contains('code-copy') ? (ok ? '✓ 已复制' : '✗ 失败') : (ok ? CHECK_SVG : '✗');
+  toast(ok ? '已复制' : '复制失败，请长按手动选择');
+  clearTimeout(btn._t); btn._t = setTimeout(() => { btn.innerHTML = btn.dataset.orig; }, 1300);
+}
+// 事件委托：代码块复制 / 单条消息复制（survives innerHTML 重渲染）
+chatEl.addEventListener('click', async (e) => {
+  const cc = e.target.closest('.code-copy');
+  if (cc) { e.stopPropagation(); const code = cc.closest('.code-block') && cc.closest('.code-block').querySelector('code'); flashCopy(cc, await copyText(code ? code.textContent : '')); return; }
+  const mc = e.target.closest('.msg-copy');
+  if (mc) { e.stopPropagation(); const msg = mc.closest('.msg'); flashCopy(mc, await copyText((msg && msg.__raw) || '')); return; }
+});
 
 // ===== 存储（内存为主，localStorage 仅持久化）=====
 function loadChats() { return CHATS; }
@@ -226,19 +294,47 @@ function onKey(e) {
 function now() { return new Date().toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'}); }
 function scrollEnd() { requestAnimationFrame(() => chatEl.scrollTop = chatEl.scrollHeight); }
 
+// 轻量 Markdown 渲染（自带、无外部依赖；先转义再套规则，杜绝 XSS）
 function renderContent(text) {
-  let html = esc(text);
-  html = html.replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g,
-    '<img src="$2" alt="$1" onclick="window.open(this.src)">');
-  html = html.replace(/(https?:\/\/[^\s<"]+\.(?:png|jpg|jpeg|webp))(?![^<]*<\/a>)(?![^<]*")/gi,
-    function(url) {
-      return '<img src="' + url + '" onclick="window.open(this.src)"><a href="' + url + '" target="_blank">📥 下载原图</a>';
-    });
-  html = html.replace(/(https?:\/\/[^\s<"]+)(?![^<]*<\/a>)(?![^<]*">)/g,
-    function(m) {
-      if (m.match(/\.(png|jpg|jpeg|webp)$/i)) return m;
-      return '<a href="' + m + '" target="_blank">' + m + '</a>';
-    });
+  const escH = (x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // 1) 抽出 ``` 代码块占位，避免内部被其它规则破坏
+  const codes = [];
+  let s = String(text).replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+    codes.push({ lang: (lang || '').trim(), code: code.replace(/\n+$/, '') });
+    return '￼' + (codes.length - 1) + '￼';
+  });
+  // 行内格式化
+  const inline = (t) => {
+    t = escH(t);
+    t = t.replace(/`([^`]+)`/g, (m, c) => '<code class="inline">' + c + '</code>');
+    t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s"']+)\)/g, '<img src="$2" alt="$1" onclick="window.open(this.src)">');
+    t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s"']+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+    t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)"']+)/g, (m, pre, u) =>
+      /\.(png|jpe?g|webp|gif)$/i.test(u)
+        ? pre + '<img src="' + u + '" onclick="window.open(this.src)"><a href="' + u + '" target="_blank">📥 下载原图</a>'
+        : pre + '<a href="' + u + '" target="_blank">' + u + '</a>');
+    return t;
+  };
+  // 2) 块级
+  const lines = s.split('\n');
+  let html = '', para = [], i = 0, m;
+  const flush = () => { if (para.length) { html += '<p>' + para.map(inline).join('<br>') + '</p>'; para = []; } };
+  while (i < lines.length) {
+    const ln = lines[i], ph = ln.match(/^￼(\d+)￼\s*$/);
+    if (ph) { flush(); const c = codes[+ph[1]];
+      html += '<div class="code-block"><div class="code-head"><span>' + escH(c.lang || 'code') + '</span><button class="code-copy" title="复制代码">' + COPY_SVG + '<span>复制</span></button></div><pre><code>' + escH(c.code) + '</code></pre></div>';
+      i++; continue; }
+    if (/^\s*$/.test(ln)) { flush(); i++; continue; }
+    if (m = ln.match(/^(#{1,3})\s+(.*)$/)) { flush(); const lv = m[1].length; html += '<h' + lv + '>' + inline(m[2]) + '</h' + lv + '>'; i++; continue; }
+    if (/^\s*([-*])\s+/.test(ln)) { flush(); html += '<ul>'; while (i < lines.length && /^\s*([-*])\s+/.test(lines[i])) { html += '<li>' + inline(lines[i].replace(/^\s*[-*]\s+/, '')) + '</li>'; i++; } html += '</ul>'; continue; }
+    if (/^\s*\d+\.\s+/.test(ln)) { flush(); html += '<ol>'; while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) { html += '<li>' + inline(lines[i].replace(/^\s*\d+\.\s+/, '')) + '</li>'; i++; } html += '</ol>'; continue; }
+    if (/^\s*>\s?/.test(ln)) { flush(); const q = []; while (i < lines.length && /^\s*>\s?/.test(lines[i])) { q.push(lines[i].replace(/^\s*>\s?/, '')); i++; } html += '<blockquote>' + q.map(inline).join('<br>') + '</blockquote>'; continue; }
+    if (/^\s*([-*_])\1{2,}\s*$/.test(ln)) { flush(); html += '<hr>'; i++; continue; }
+    para.push(ln); i++;
+  }
+  flush();
   return html;
 }
 
@@ -250,6 +346,18 @@ function splitThink(t) {
   return { text: s.trim() };
 }
 
+function msgFoot(withTime) {
+  return '<div class="msg-foot"><button class="msg-copy" title="复制" aria-label="复制">' + COPY_SVG + '</button>'
+       + (withTime ? '<span class="msg-time">' + now() + '</span>' : '') + '</div>';
+}
+function buildMsg(role, content, withTime) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + (role === 'user' ? 'user' : 'ai');
+  div.__raw = content;                                  // 复制按钮用：保存原始文本（非渲染后的 HTML）
+  div.innerHTML = '<div class="bubble">' + (role === 'user' ? esc(content) : renderContent(content)) + '</div>' + msgFoot(withTime);
+  return div;
+}
+
 function renderMessages() {
   const msgs = getCurrentMessages();
   if (msgs.length === 0) {
@@ -257,12 +365,7 @@ function renderMessages() {
     return;
   }
   chatEl.innerHTML = '';
-  msgs.forEach(m => {
-    const div = document.createElement('div');
-    div.className = 'msg ' + (m.role === 'user' ? 'user' : 'ai');
-    div.innerHTML = '<div class="bubble">' + (m.role === 'user' ? esc(m.content) : renderContent(m.content)) + '</div>';
-    chatEl.appendChild(div);
-  });
+  msgs.forEach(m => chatEl.appendChild(buildMsg(m.role, m.content, false)));
   scrollEnd();
 }
 
@@ -316,9 +419,7 @@ async function send() {
   if (!currentChatId) newChat();
 
   // 用户消息
-  const userDiv = document.createElement('div');
-  userDiv.className = 'msg user';
-  userDiv.innerHTML = '<div class="bubble">' + esc(text) + '</div><div class="msg-time">' + now() + '</div>';
+  const userDiv = buildMsg('user', text, true);
   const w = chatEl.querySelector('.welcome');
   if (w) w.remove();
   chatEl.appendChild(userDiv);
@@ -345,7 +446,7 @@ async function send() {
     typingDiv.remove();
     const aiDiv = document.createElement('div');
     aiDiv.className = 'msg ai';
-    aiDiv.innerHTML = '<div class="bubble"></div><div class="msg-time">' + now() + '</div>';
+    aiDiv.innerHTML = '<div class="bubble"></div>';
     chatEl.appendChild(aiDiv);
     const bubble = aiDiv.querySelector('.bubble');
     const TYPING = '<div class="typing"><span></span><span></span><span></span></div>';
@@ -383,6 +484,8 @@ async function send() {
     const finalText = splitThink(fullText).text;
     if (finalText) {
       bubble.innerHTML = renderContent(finalText);
+      aiDiv.__raw = finalText;
+      aiDiv.insertAdjacentHTML('beforeend', msgFoot(true));   // 流结束后补上"复制"按钮
       saveMessage('assistant', finalText);   // 只把"干净的正文"写入上下文；空回复不写入，防止下一轮重复上一题
     } else {
       bubble.innerHTML = '⚠️ 模型未返回正文内容';
@@ -404,6 +507,7 @@ async function send() {
 
 // ===== 初始化 =====
 (function init() {
+  if (isTouch) document.body.classList.add('touch');   // 触屏设备：复制按钮常显，便于点按
   loadFromStorage();
   const chats = loadChats();
   const saved = localStorage.getItem('currentChat');
