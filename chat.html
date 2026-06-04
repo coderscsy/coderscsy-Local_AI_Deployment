@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
 <title>Local AI Chat</title>
 <style>
 :root{--bg:#0a0a0c;--surface:#141418;--surface2:#1c1c22;--border:#2a2a32;--text:#e8e8ec;--text2:#8888a0;--accent:#6366f1;--radius:16px}
@@ -66,7 +66,7 @@ select{flex-shrink:1;min-width:0}.btn-s{cursor:pointer;flex-shrink:0}.btn-s:hove
 .input-row textarea::placeholder{color:var(--text2)}
 .send-btn{width:40px;height:40px;background:var(--accent);border:none;border-radius:12px;color:white;font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .send-btn:active{transform:scale(.93)}.send-btn:disabled{opacity:.35}
-@media(max-width:600px){.sidebar{width:240px}.sidebar.hidden{transform:translateX(-240px)}.menu-btn{display:block}.header{padding:10px 12px}.header-left{gap:6px}select,.btn-s{max-width:110px}}
+@media(max-width:600px){.sidebar{width:240px}.sidebar.hidden{transform:translateX(-240px)}.menu-btn{display:block;font-size:18px}.header{padding:6px 10px}.header-left{gap:6px}.logo{width:26px;height:26px;font-size:12px}.h-title{font-size:13px;line-height:1.2}.h-status{font-size:10px;line-height:1.2}select,.btn-s{max-width:110px}}
 </style>
 </head>
 <body>
@@ -380,7 +380,7 @@ async function send() {
 
   generating = false;
   sendBtn.disabled = false;
-  inputEl.focus();
+  if (!isTouch) inputEl.focus();   // 手机端不自动聚焦，避免每次回复后又弹出键盘、挡住输入框
 }
 
 // ===== 初始化 =====
@@ -399,6 +399,17 @@ async function send() {
   renderMessages();
   if (window.innerWidth <= 600) sidebarEl.classList.add('hidden');
 })();
+
+// 让布局高度跟随「可视视口」：手机弹出键盘时整体收缩，确保输入框/发送键始终在屏内、可继续对话
+function fitViewport() {
+  const vv = window.visualViewport;
+  if (vv) document.body.style.height = vv.height + 'px';
+}
+if (window.visualViewport) {
+  visualViewport.addEventListener('resize', fitViewport);
+  visualViewport.addEventListener('scroll', fitViewport);
+  fitViewport();
+}
 </script>
 </body>
 </html>
