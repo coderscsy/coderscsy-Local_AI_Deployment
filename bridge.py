@@ -12,6 +12,7 @@ import time
 import os
 import re
 import socket
+import subprocess
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -71,6 +72,21 @@ DEFAULT_STEPS = 8
 DEFAULT_WIDTH = 1024
 DEFAULT_HEIGHT = 1024
 EXTERNAL_HOST = None
+
+
+def unload_all_models():
+    """切换模型时先卸载所有已加载模型，腾出内存（依赖 LM Studio 的 lms CLI；需先 `lms bootstrap` 安装到 PATH）。
+    搭配已开启的 JIT：卸载后下一次请求会自动加载目标模型，从而实现"先卸当前→再载新的"。"""
+    try:
+        r = subprocess.run(["lms", "unload", "--all"], capture_output=True, text=True, timeout=30)
+        print(f"  [SWITCH] lms unload --all → rc={r.returncode}")
+        return True
+    except FileNotFoundError:
+        print("  [SWITCH] 未找到 lms 命令：请在 Mac 执行 `lms bootstrap` 安装后重启 bridge（已跳过自动卸载）")
+        return False
+    except Exception as ex:
+        print(f"  [SWITCH] 卸载出错：{ex}")
+        return False
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -364,13 +380,26 @@ class BridgeHandler(BaseHTTPRequestHandler):
         else:
             print(f"  [BRIDGE] 💬 -> LM Studio")
             headers_sent = False
-            try:
+            def _open():
                 req = urllib.request.Request(
                     f"{LM_STUDIO_HOST}/v1/chat/completions",
                     data=json.dumps(body).encode(),
                     headers={"Content-Type": "application/json"}, method="POST"
                 )
-                resp = urllib.request.urlopen(req, timeout=TIMEOUT)
+                return urllib.request.urlopen(req, timeout=TIMEOUT)
+            try:
+                try:
+                    resp = _open()
+                except Exception as oe:
+                    d = oe.read().decode("utf-8", "replace") if hasattr(oe, "read") else ""
+                    # 切换模型常见的"加载失败/资源不足"400：卸载旧模型后重试一次（先卸当前→再载新的）
+                    if getattr(oe, "code", None) == 400 and re.search(r"failed to load|insufficient|resource|out of memory|加载失败|资源|内存", d, re.I) and unload_all_models():
+                        print("  [SWITCH] 资源不足/加载失败：已卸载旧模型，重试加载新模型…")
+                        time.sleep(0.5)
+                        resp = _open()
+                    else:
+                        oe._detail = d           # 不可重试：把已读到的报错带给外层透传，避免二次 read 读空
+                        raise
                 ct = resp.headers.get("Content-Type", "application/json")
                 is_stream = "event-stream" in ct
                 self.send_response(200)
@@ -400,12 +429,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 resp.close()
             except Exception as e:
                 code = getattr(e, "code", None)        # HTTPError 自带 .code/.read()，含 LM Studio 的真实报错原因
-                detail = ""
-                if hasattr(e, "read"):
+                detail = getattr(e, "_detail", None)   # 重试路径已读过 body，优先复用，避免二次 read 读空
+                if detail is None and hasattr(e, "read"):
                     try:
                         detail = e.read().decode("utf-8", "replace")
                     except Exception:
-                        pass
+                        detail = ""
+                detail = detail or ""
                 print(f"  [ERROR] {e}" + (f" | LM Studio: {detail[:800]}" if detail else ""))
                 if not headers_sent:                  # headers 未发才能再返回错误，否则只能让连接关闭收尾
                     try:
