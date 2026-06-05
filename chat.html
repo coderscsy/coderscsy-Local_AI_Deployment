@@ -379,15 +379,21 @@ async function checkStatus() {
     if (!r.ok) throw 0;
     const data = await r.json();
     const models = (data.data || []).filter(m => !m.id.includes('embed'));
-    const cur = modelSel.value;
-    modelSel.innerHTML = '';
-    models.forEach(m => {
-      const o = document.createElement('option');
-      o.value = m.id;
-      o.textContent = m.id.split('/').pop().substring(0, 22);
-      modelSel.appendChild(o);
-    });
-    if (cur && [...modelSel.options].some(o => o.value === cur)) modelSel.value = cur;
+    const ids = models.map(m => m.id);
+    // 只有模型列表变化时才重建下拉框——否则每 15 秒重建会打断手机上正在进行的选择，导致"切换不了"
+    if (ids.join('|') !== [...modelSel.options].map(o => o.value).join('|')) {
+      const saved = localStorage.getItem('model');
+      const want = (saved && ids.includes(saved)) ? saved
+                 : (ids.includes(modelSel.value) ? modelSel.value : ids[0]);
+      modelSel.innerHTML = '';
+      models.forEach(m => {
+        const o = document.createElement('option');
+        o.value = m.id;
+        o.textContent = m.id.split('/').pop().substring(0, 22);
+        modelSel.appendChild(o);
+      });
+      if (want) modelSel.value = want;
+    }
     statusEl.innerHTML = '<span class="dot on"></span>已连接';
   } catch(e) {
     statusEl.innerHTML = '<span class="dot off"></span>未连接';
@@ -395,6 +401,7 @@ async function checkStatus() {
 }
 checkStatus();
 setInterval(checkStatus, 15000);
+modelSel.addEventListener('change', () => { try { localStorage.setItem('model', modelSel.value); } catch(e) {} });   // 记住所选模型
 
 function setApi() {
   const v = prompt('API 地址:', API);
