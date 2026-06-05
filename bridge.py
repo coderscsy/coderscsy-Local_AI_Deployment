@@ -89,6 +89,30 @@ def unload_all_models():
         return False
 
 
+LOADED_MODEL = None
+LOADED_CTX = None
+
+def ensure_loaded(model, ctx):
+    """网页端指定上下文长度时：卸载旧模型，再用 `lms load --context-length` 显式加载该模型，
+    使上下文长度可在前端调节（依赖 lms CLI；缺失/失败则优雅跳过，回退到 JIT/护栏）。"""
+    global LOADED_MODEL, LOADED_CTX
+    if not model or not ctx:
+        return
+    if model == LOADED_MODEL and ctx == LOADED_CTX:
+        return                              # 已按该(模型,上下文)加载，免重复重载
+    try:
+        subprocess.run(["lms", "unload", "--all"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["lms", "load", model, "--context-length", str(ctx), "-y"],
+                           capture_output=True, text=True, timeout=300)
+        print(f"  [CTX] lms load {model} --context-length {ctx} → rc={r.returncode} {(r.stderr or '').strip()[:160]}")
+        if r.returncode == 0:
+            LOADED_MODEL, LOADED_CTX = model, ctx
+    except FileNotFoundError:
+        print("  [CTX] 未找到 lms（请先在 Mac 执行 `lms bootstrap`）——上下文调节暂不生效")
+    except Exception as e:
+        print(f"  [CTX] 加载出错：{e}")
+
+
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
@@ -317,6 +341,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         messages = body.get("messages", [])
         model = body.get("model", "qwen/qwen3.6-35b-a3b")
+        ctx_len = body.pop("context_length", None)   # 网页端选择的上下文长度（自定义字段，转发前移除）
+        if ctx_len:
+            ensure_loaded(model, ctx_len)            # 卸载并用指定 context-length 重新加载，使上下文可调
         is_stream = body.get("stream", False)
         last_msg = extract_user_message(messages)
 

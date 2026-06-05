@@ -39,6 +39,7 @@ body{font-family:-apple-system,'Noto Sans SC',sans-serif;background:var(--bg);co
 .h-right{display:flex;gap:6px;align-items:center;flex:1;min-width:0;justify-content:flex-end}
 select,.btn-s{background:var(--surface2);border:1px solid var(--border);color:var(--text);font-size:12px;padding:5px 8px;border-radius:8px;font-family:inherit;outline:none;max-width:140px}
 select{flex-shrink:1;min-width:0}.btn-s{cursor:pointer;flex-shrink:0}.btn-s:hover{border-color:var(--text2)}
+#ctxSel{max-width:76px;flex-shrink:0}
 
 .chat{flex:1;overflow-y:auto;padding:16px;scroll-behavior:smooth;-webkit-overflow-scrolling:touch}
 .msg{max-width:85%;margin-bottom:14px;animation:fadeIn .2s ease}
@@ -121,6 +122,13 @@ body.touch .msg-copy{opacity:.55}
     </div>
     <div class="h-right">
       <select id="modelSel"></select>
+      <select id="ctxSel" title="上下文长度（更改后下一条消息按此重载模型，需 Mac 装好 lms）">
+        <option value="">上下文</option>
+        <option value="4096">4K</option>
+        <option value="8192">8K</option>
+        <option value="16384">16K</option>
+        <option value="32768">32K</option>
+      </select>
       <button class="btn-s" onclick="setApi()">⚙</button>
     </div>
   </div>
@@ -143,6 +151,7 @@ const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('sendBtn');
 const statusEl = document.getElementById('status');
 const modelSel = document.getElementById('modelSel');
+const ctxSel = document.getElementById('ctxSel');
 const chatList = document.getElementById('chatList');
 const sidebarEl = document.getElementById('sidebar');
 
@@ -402,6 +411,8 @@ async function checkStatus() {
 checkStatus();
 setInterval(checkStatus, 15000);
 modelSel.addEventListener('change', () => { try { localStorage.setItem('model', modelSel.value); } catch(e) {} });   // 记住所选模型
+ctxSel.value = localStorage.getItem('ctx') || '';                                                                    // 恢复上下文长度选择
+ctxSel.addEventListener('change', () => { try { localStorage.setItem('ctx', ctxSel.value); } catch(e) {} });
 
 function setApi() {
   const v = prompt('API 地址:', API);
@@ -447,7 +458,7 @@ async function send() {
     const res = await fetch(API + '/v1/chat/completions', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer lm-studio'},
-      body: JSON.stringify({model: modelSel.value, messages: allMsgs, temperature: 0.7, stream: true})
+      body: JSON.stringify({model: modelSel.value, messages: allMsgs, temperature: 0.7, stream: true, ...(ctxSel.value ? {context_length: +ctxSel.value} : {})})
     });
     if (!res.ok) {
       let detail = '';
