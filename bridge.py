@@ -167,12 +167,13 @@ def is_image_request(text):
 def parse_params(text):
     p = {"steps": DEFAULT_STEPS, "width": DEFAULT_WIDTH, "height": DEFAULT_HEIGHT}
     # 否定后顾 (?<!汉字)：避免把"身高143""提高100""加宽"等词里的 高/宽 误当成图片尺寸（保留"猫 宽1920 高1080"这种）
+    # 仅在合理范围内才采用，否则用默认值——避免"高1"这类误匹配产出 1px 的非法尺寸让 Draw Things 422
     m = re.search(r'(?:(?<![一-鿿])步数|\bsteps?)\s*(\d+)', text, re.IGNORECASE)
-    if m: p["steps"] = int(m.group(1))
+    if m and 1 <= int(m.group(1)) <= 150: p["steps"] = int(m.group(1))
     m = re.search(r'(?:(?<![一-鿿])宽|\bwidth)\s*(\d+)', text, re.IGNORECASE)
-    if m: p["width"] = int(m.group(1))
+    if m and 64 <= int(m.group(1)) <= 4096: p["width"] = int(m.group(1)) // 8 * 8   # 对齐到 8 的倍数
     m = re.search(r'(?:(?<![一-鿿])高|\bheight)\s*(\d+)', text, re.IGNORECASE)
-    if m: p["height"] = int(m.group(1))
+    if m and 64 <= int(m.group(1)) <= 4096: p["height"] = int(m.group(1)) // 8 * 8
     return p
 
 
