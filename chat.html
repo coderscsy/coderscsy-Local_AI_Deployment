@@ -416,6 +416,7 @@ function setApi() {
 async function send() {
   const text = inputEl.value.trim();
   if (!text || generating) return;
+  if (!modelSel.value) { toast('模型未就绪：请确认 LM Studio 已加载模型'); return; }
 
   generating = true;
   sendBtn.disabled = true;
@@ -448,7 +449,11 @@ async function send() {
       headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer lm-studio'},
       body: JSON.stringify({model: modelSel.value, messages: allMsgs, temperature: 0.7, stream: true})
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.text()).slice(0, 400); } catch(e) {}
+      throw new Error('HTTP ' + res.status + (detail ? ' — ' + detail : ''));
+    }
 
     typingDiv.remove();
     const aiDiv = document.createElement('div');

@@ -399,10 +399,26 @@ class BridgeHandler(BaseHTTPRequestHandler):
                         break
                 resp.close()
             except Exception as e:
-                print(f"  [ERROR] {e}")
-                if not headers_sent:                  # headers 未发才能再返回错误状态码，否则只能让连接关闭收尾
+                code = getattr(e, "code", None)        # HTTPError 自带 .code/.read()，含 LM Studio 的真实报错原因
+                detail = ""
+                if hasattr(e, "read"):
                     try:
-                        self._send({"error": str(e)}, 500)
+                        detail = e.read().decode("utf-8", "replace")
+                    except Exception:
+                        pass
+                print(f"  [ERROR] {e}" + (f" | LM Studio: {detail[:800]}" if detail else ""))
+                if not headers_sent:                  # headers 未发才能再返回错误，否则只能让连接关闭收尾
+                    try:
+                        if code and detail:           # 把上游真实状态码+报错原样回传，便于定位（如"模型未加载"）
+                            self.send_response(code)
+                            self.send_header("Content-Type", "application/json")
+                            self.send_header("Access-Control-Allow-Origin", "*")
+                            b = detail.encode()
+                            self.send_header("Content-Length", str(len(b)))
+                            self.end_headers()
+                            self.wfile.write(b)
+                        else:
+                            self._send({"error": str(e)}, 500)
                     except Exception:
                         pass
 
