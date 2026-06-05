@@ -166,11 +166,12 @@ def is_image_request(text):
 
 def parse_params(text):
     p = {"steps": DEFAULT_STEPS, "width": DEFAULT_WIDTH, "height": DEFAULT_HEIGHT}
-    m = re.search(r'(?:步数|steps?)\s*(\d+)', text, re.IGNORECASE)
+    # 否定后顾 (?<!汉字)：避免把"身高143""提高100""加宽"等词里的 高/宽 误当成图片尺寸（保留"猫 宽1920 高1080"这种）
+    m = re.search(r'(?:(?<![一-鿿])步数|\bsteps?)\s*(\d+)', text, re.IGNORECASE)
     if m: p["steps"] = int(m.group(1))
-    m = re.search(r'(?:宽|width)\s*(\d+)', text, re.IGNORECASE)
+    m = re.search(r'(?:(?<![一-鿿])宽|\bwidth)\s*(\d+)', text, re.IGNORECASE)
     if m: p["width"] = int(m.group(1))
-    m = re.search(r'(?:高|height)\s*(\d+)', text, re.IGNORECASE)
+    m = re.search(r'(?:(?<![一-鿿])高|\bheight)\s*(\d+)', text, re.IGNORECASE)
     if m: p["height"] = int(m.group(1))
     return p
 
@@ -178,9 +179,9 @@ def parse_params(text):
 def extract_description(text):
     s = text
     # 去掉尺寸/步数参数
-    s = re.sub(r'(?:步数|steps?)\s*\d+', '', s, flags=re.IGNORECASE)
-    s = re.sub(r'(?:宽|width)\s*\d+', '', s, flags=re.IGNORECASE)
-    s = re.sub(r'(?:高|height)\s*\d+', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'(?:(?<![一-鿿])步数|\bsteps?)\s*\d+', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'(?:(?<![一-鿿])宽|\bwidth)\s*\d+', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'(?:(?<![一-鿿])高|\bheight)\s*\d+', '', s, flags=re.IGNORECASE)
     # 去掉斜杠命令前缀 /draw /image /img /gen
     s = re.sub(r'^\s*/(?:draw|image|img|gen|generate)\b\s*', '', s, flags=re.IGNORECASE)
     # 去掉英文触发短语前缀：(please/can you…) draw/create/make… (a/an/the/me/some) (image/picture…) (of)
