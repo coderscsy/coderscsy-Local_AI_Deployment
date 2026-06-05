@@ -225,6 +225,49 @@ def translate_to_english(text, model):
     return text
 
 
+def vision_gate_and_prompt(messages, model):
+    """带图请求：让视觉模型看图+用户文字，自己决定「聊天」还是「生图」。
+    返回 ("draw", 英文提示词) 或 ("chat", None)；调用/解析失败一律回退 ("chat", None)，宁可不画也不打扰。"""
+    user_content = None
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            user_content = msg.get("content")
+            break
+    if user_content is None:
+        return ("chat", None)
+
+    instruction = (
+        "The user sent an image. Decide what they want. "
+        "If they want you to GENERATE a new image based on this picture "
+        "(e.g. 'draw one like this', 'in this style', 'turn this into ...', "
+        "'照这个画一张', '换成赛博朋克风', '把背景改成雪山'), "
+        "output exactly 'DRAW:' followed by ONE detailed English image-generation prompt "
+        "that looks at the image and incorporates their requested changes. "
+        "Otherwise (they just want to talk about or ask about the image), output exactly 'CHAT'. "
+        "Output nothing else, no explanation."
+    )
+    data = {
+        "model": model, "stream": False, "temperature": 0.3, "max_tokens": 1024,
+        "messages": [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    result = call_api(f"{LM_STUDIO_HOST}/v1/chat/completions", data)
+    if not (result and "choices" in result):
+        return ("chat", None)
+    text = result["choices"][0]["message"].get("content", "") or ""
+    # 去掉推理模型的 <think> 思考，避免把思考当成提示词
+    text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<think>[\s\S]*$', '', text, flags=re.IGNORECASE).strip()
+    m = re.search(r'DRAW\s*:\s*(.+)', text, re.IGNORECASE | re.DOTALL)
+    if m:
+        prompt = m.group(1).strip().strip('`').strip()
+        if prompt:
+            return ("draw", prompt)
+    return ("chat", None)
+
+
 def generate_image(prompt, params):
     data = {
         "prompt": prompt,
@@ -391,7 +434,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
         print(f"\n  [IN] stream={is_stream}")
         print(f"  [IN] msg = {last_msg}")
 
-        if is_image_request(last_msg) and not has_image_input(messages):   # 带上传图片=视觉请求，不画图，转发给模型
+        # 决定走哪条路：①带图 → 视觉模型自己判「聊天 or 生图」(生图则直接给英文提示词)；②纯文字画图意图 → 原翻译生图；③否则转发
+        vision_prompt = None
+        do_image = False
+        if has_image_input(messages):
+            v_mode, v_prompt = vision_gate_and_prompt(messages, model)
+            print(f"  [BRIDGE] 👁 vision gate → {v_mode}")
+            if v_mode == "draw" and v_prompt:
+                do_image, vision_prompt = True, v_prompt
+        elif is_image_request(last_msg):
+            do_image = True
+
+        if do_image:
             print(f"  [BRIDGE] 🎨 Image!")
 
             params = parse_params(last_msg)
@@ -402,7 +456,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._sse_start(model)
                 self._sse_text("🎨 正在生成图片，请稍候…\n\n")
 
-                prompt = translate_to_english(description, model)
+                prompt = translate_to_english(vision_prompt if vision_prompt is not None else description, model)
                 print(f"  [BRIDGE] prompt = {prompt}")
                 # 用代码块包住提示词 → 网页端自带"复制"按钮，可一键复制
                 self._sse_text(f"```提示词\n{prompt}\n```\n\n")
@@ -427,7 +481,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self._sse_end()
 
             else:
-                prompt = translate_to_english(description, model)
+                prompt = translate_to_english(vision_prompt if vision_prompt is not None else description, model)
                 print(f"  [BRIDGE] prompt = {prompt}")
                 fpath, fname = generate_image(prompt, params)
 
