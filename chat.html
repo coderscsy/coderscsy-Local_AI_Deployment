@@ -23,6 +23,7 @@ body{font-family:-apple-system,'Noto Sans SC',sans-serif;background:var(--bg);co
 .chat-item .del{opacity:0;color:var(--text2);cursor:pointer;font-size:16px;padding:0 4px}
 .chat-item:hover .del{opacity:1}
 .chat-item .del:hover{color:#ef4444}
+body.touch .chat-item .del{opacity:.65;font-size:20px;padding:2px 8px}   /* 触屏没有 hover：删除键常显、加大点按区 */
 .chat-item-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 
 /* 主区域 */
@@ -274,6 +275,7 @@ function switchChat(id) {
 }
 
 function deleteChat(id) {
+  if (!confirm('删除这个对话？删除后无法恢复。')) return;
   const chats = loadChats();
   delete chats[id];
   saveChats(chats);
@@ -316,13 +318,13 @@ function renderContent(text) {
   const inline = (t) => {
     t = escH(t);
     t = t.replace(/`([^`]+)`/g, (m, c) => '<code class="inline">' + c + '</code>');
-    t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s"']+)\)/g, '<img src="$2" alt="$1" onclick="window.open(this.src)">');
+    t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s"']+)\)/g, '<img loading="lazy" src="$2" alt="$1" onclick="window.open(this.src)">');
     t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s"']+)\)/g, '<a href="$2" target="_blank">$1</a>');
     t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     t = t.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
     t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)"']+)/g, (m, pre, u) =>
       /\.(png|jpe?g|webp|gif)$/i.test(u)
-        ? pre + '<img src="' + u + '" onclick="window.open(this.src)"><a href="' + u + '" target="_blank">📥 下载原图</a>'
+        ? pre + '<img loading="lazy" src="' + u + '" onclick="window.open(this.src)"><a href="' + u + '" target="_blank">📥 下载原图</a>'
         : pre + '<a href="' + u + '" target="_blank">' + u + '</a>');
     return t;
   };

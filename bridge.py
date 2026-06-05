@@ -310,7 +310,15 @@ class BridgeHandler(BaseHTTPRequestHandler):
             fpath = os.path.join(IMAGE_DIR, fname)
             if os.path.exists(fpath):
                 with open(fpath, "rb") as f:
-                    self._send(f.read(), ct="image/png")
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                # 生成的图片不会变：让浏览器长期缓存，切换/回看对话时不再重复下载（之前每次切换都重新拉，故觉得慢）
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
             else:
                 self._send({"error": "Not found"}, 404)
 
