@@ -68,6 +68,14 @@ select{flex-shrink:1;min-width:0}.btn-s{cursor:pointer;flex-shrink:0}.btn-s:hove
 .input-row textarea::placeholder{color:var(--text2)}
 .send-btn{width:40px;height:40px;background:var(--accent);border:none;border-radius:12px;color:white;font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .send-btn:active{transform:scale(.93)}.send-btn:disabled{opacity:.35}
+.send-btn.stop{background:#ef4444}
+.att-btn{width:40px;height:40px;background:var(--surface2);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:20px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.att-btn:active{transform:scale(.93)}
+.img-preview{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.img-preview .pv{position:relative}
+.img-preview img{height:54px;border-radius:8px;display:block}
+.img-preview .rm{position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#ef4444;color:#fff;font-size:12px;line-height:18px;text-align:center;cursor:pointer}
+.bubble .up-img{max-width:200px;border-radius:8px;margin:2px 0 6px;display:block;cursor:pointer}
 
 /* 消息底部操作栏 + 复制 */
 .msg-foot{display:flex;align-items:center;gap:6px;margin-top:4px;padding:0 2px;min-height:16px}
@@ -139,7 +147,7 @@ body.touch .msg-copy{opacity:.55}
   <div class="input-area">
     <div class="input-row">
       <textarea id="input" rows="1" placeholder="输入消息...  含'画/生成'自动生图" oninput="autoH(this)" onkeydown="onKey(event)"></textarea>
-      <button class="send-btn" id="sendBtn" onclick="send()">↑</button>
+      <button class="send-btn" id="sendBtn" onclick="onSend()">↑</button>
     </div>
   </div>
 </div>
@@ -157,6 +165,7 @@ const chatList = document.getElementById('chatList');
 const sidebarEl = document.getElementById('sidebar');
 
 let generating = false;
+let abortCtrl = null;
 let currentChatId = null;
 let CHATS = {};                      // 内存中的会话数据（唯一可信源），localStorage 仅作持久化
 const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
@@ -426,13 +435,38 @@ function setApi() {
 }
 
 // ===== 发送 =====
+// 发送按钮：生成中点击=终止；否则=发送
+function onSend() { if (generating) { if (abortCtrl) abortCtrl.abort(); } else send(); }
+function setSendStop(on) { sendBtn.innerHTML = on ? '■' : '↑'; sendBtn.classList.toggle('stop', on); sendBtn.title = on ? '终止生成' : '发送'; }
+
+// 渲染并收尾一条 AI 消息（正常结束 / 被截断 / 被终止 共用）
+function finishAi(aiDiv, bubble, fullText, finishReason, aborted) {
+  if (!aiDiv || !bubble) return;
+  const clean = splitThink(fullText).text;
+  const shown = clean || fullText.trim();   // 剥掉 <think> 后为空（多为"思考中被截断"）→ 原样显示，避免前端空白/看不全
+  if (shown) {
+    bubble.innerHTML = renderContent(shown);
+    if (aborted)
+      bubble.insertAdjacentHTML('beforeend', '<div style="color:#f59e0b;font-size:12px;margin-top:6px">⏹ 已终止生成</div>');
+    else if (finishReason === 'length')
+      bubble.insertAdjacentHTML('beforeend', '<div style="color:#f59e0b;font-size:12px;margin-top:6px">⚠️ 已达长度/上下文上限，回复被截断——请在 LM Studio 调大 Context Length</div>');
+    aiDiv.__raw = shown;
+    aiDiv.insertAdjacentHTML('beforeend', msgFoot(true));
+    if (clean) saveMessage('assistant', clean);   // 只把干净正文写入上下文；只有思考没正文则不写入
+  } else {
+    bubble.innerHTML = aborted ? '⏹ 已终止' : '⚠️ 模型未返回任何内容';
+  }
+  scrollEnd();
+}
+
 async function send() {
   const text = inputEl.value.trim();
   if (!text || generating) return;
   if (!modelSel.value) { toast('模型未就绪：请确认 LM Studio 已加载模型'); return; }
 
   generating = true;
-  sendBtn.disabled = true;
+  abortCtrl = new AbortController();
+  setSendStop(true);
   inputEl.value = '';
   inputEl.style.height = 'auto';
 
@@ -456,9 +490,11 @@ async function send() {
 
   const allMsgs = getCurrentMessages();
 
+  let aiDiv = null, bubble = null, fullText = '', finishReason = null;
   try {
     const res = await fetch(API + '/v1/chat/completions', {
       method: 'POST',
+      signal: abortCtrl.signal,
       headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer lm-studio'},
       body: JSON.stringify({model: modelSel.value, messages: allMsgs, temperature: 0.7, stream: true, ...(ctxSel.value ? {context_length: +ctxSel.value} : {})})
     });
@@ -469,18 +505,18 @@ async function send() {
     }
 
     typingDiv.remove();
-    const aiDiv = document.createElement('div');
+    aiDiv = document.createElement('div');
     aiDiv.className = 'msg ai';
     aiDiv.innerHTML = '<div class="bubble"></div>';
     chatEl.appendChild(aiDiv);
-    const bubble = aiDiv.querySelector('.bubble');
+    bubble = aiDiv.querySelector('.bubble');
     const TYPING = '<div class="typing"><span></span><span></span><span></span></div>';
     bubble.innerHTML = TYPING;          // 收到正文前一直显示等待动画（含模型"思考"阶段）
     scrollEnd();
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let fullText = '', buf = '', streamDone = false, finishReason = null;
+    let buf = '', streamDone = false;
 
     while (!streamDone) {
       const {done, value} = await reader.read();
@@ -508,28 +544,22 @@ async function send() {
       }
     }
     try { await reader.cancel(); } catch(e) {}   // 主动释放可能仍挂着的连接
-    const finalText = splitThink(fullText).text;
-    if (finalText) {
-      bubble.innerHTML = renderContent(finalText);
-      if (finishReason === 'length')   // 命中长度/上下文上限：明确提示，避免误以为是 bug
-        bubble.insertAdjacentHTML('beforeend', '<div style="color:#f59e0b;font-size:12px;margin-top:6px">⚠️ 已达长度/上下文上限，回复被截断——请在 LM Studio 调大 Context Length</div>');
-      aiDiv.__raw = finalText;
-      aiDiv.insertAdjacentHTML('beforeend', msgFoot(true));   // 流结束后补上"复制"按钮
-      saveMessage('assistant', finalText);   // 只把"干净的正文"写入上下文；空回复不写入，防止下一轮重复上一题
-    } else {
-      bubble.innerHTML = '⚠️ 模型未返回正文内容';
-    }
-    scrollEnd();
+    finishAi(aiDiv, bubble, fullText, finishReason, false);
   } catch(err) {
     typingDiv.remove();
-    const errDiv = document.createElement('div');
-    errDiv.className = 'msg ai';
-    errDiv.innerHTML = '<div class="bubble">⚠️ ' + esc(err.message) + '</div>';
-    chatEl.appendChild(errDiv);
+    if (err && err.name === 'AbortError') {
+      finishAi(aiDiv, bubble, fullText, finishReason, true);   // 用户点了终止：保留已生成的部分
+    } else {
+      const errDiv = document.createElement('div');
+      errDiv.className = 'msg ai';
+      errDiv.innerHTML = '<div class="bubble">⚠️ ' + esc(err.message) + '</div>';
+      chatEl.appendChild(errDiv);
+    }
   } finally {
-    // 无论成功/出错/流异常，都必须复位，否则 generating 卡在 true 会导致后续永远发不出
+    // 无论成功/出错/终止，都必须复位，否则 generating 卡在 true 会导致后续永远发不出
     generating = false;
-    sendBtn.disabled = false;
+    abortCtrl = null;
+    setSendStop(false);
     if (!isTouch) inputEl.focus();   // 手机端不自动聚焦，避免每次回复后又弹出键盘
   }
 }
