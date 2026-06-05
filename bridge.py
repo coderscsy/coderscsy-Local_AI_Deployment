@@ -215,7 +215,11 @@ def translate_to_english(text, model):
     }
     result = call_api(f"{LM_STUDIO_HOST}/v1/chat/completions", data)
     if result and "choices" in result:
-        t = result["choices"][0]["message"]["content"].strip()
+        t = result["choices"][0]["message"]["content"]
+        # 去掉推理模型的 <think> 思考——否则中文思考会混进提示词、看起来像"翻译成了中文"
+        t = re.sub(r'<think>[\s\S]*?</think>', '', t, flags=re.IGNORECASE)
+        t = re.sub(r'<think>[\s\S]*$', '', t, flags=re.IGNORECASE)   # 未闭合的也去掉
+        t = t.strip()
         if t:
             return t
     return text

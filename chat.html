@@ -295,12 +295,11 @@ function deleteChat(id) {
   delete chats[id];
   saveChats(chats);
   if (id === currentChatId) {
-    const keys = Object.keys(chats);
-    if (keys.length > 0) {
-      switchChat(keys[0]);
-    } else {
-      newChat();
-    }
+    // 删除当前会话后展示一个完全空白的会话（欢迎页），而不是跳到别的会话；其它会话仍在侧栏，发消息时再新建
+    currentChatId = null;
+    try { localStorage.removeItem('currentChat'); } catch(e) {}
+    renderChatList();
+    renderMessages();
   } else {
     renderChatList();
   }
