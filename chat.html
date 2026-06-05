@@ -467,7 +467,7 @@ async function send() {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let fullText = '', buf = '', streamDone = false;
+    let fullText = '', buf = '', streamDone = false, finishReason = null;
 
     while (!streamDone) {
       const {done, value} = await reader.read();
@@ -482,7 +482,9 @@ async function send() {
         if (d === '[DONE]') { streamDone = true; break; }  // 收到结束标记立即停止，不再傻等连接关闭——否则会卡死，下一条发不出去、要刷新页面
         try {
           const j = JSON.parse(d);
-          const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+          const ch0 = j.choices && j.choices[0];
+          if (ch0 && ch0.finish_reason) finishReason = ch0.finish_reason;   // length=被长度/上下文截断
+          const delta = ch0 && ch0.delta && ch0.delta.content;
           if (delta) {
             fullText += delta;
             const cut = splitThink(fullText);
@@ -496,6 +498,8 @@ async function send() {
     const finalText = splitThink(fullText).text;
     if (finalText) {
       bubble.innerHTML = renderContent(finalText);
+      if (finishReason === 'length')   // 命中长度/上下文上限：明确提示，避免误以为是 bug
+        bubble.insertAdjacentHTML('beforeend', '<div style="color:#f59e0b;font-size:12px;margin-top:6px">⚠️ 已达长度/上下文上限，回复被截断——请在 LM Studio 调大 Context Length</div>');
       aiDiv.__raw = finalText;
       aiDiv.insertAdjacentHTML('beforeend', msgFoot(true));   // 流结束后补上"复制"按钮
       saveMessage('assistant', finalText);   // 只把"干净的正文"写入上下文；空回复不写入，防止下一轮重复上一题
