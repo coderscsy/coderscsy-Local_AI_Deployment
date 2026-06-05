@@ -383,11 +383,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
             if is_stream:
                 self._sse_start(model)
-                self._sse_text("🎨 正在生成图片，请稍候...\n\n")
+                self._sse_text("🎨 正在生成图片，请稍候…\n\n")
 
                 prompt = translate_to_english(description, model)
                 print(f"  [BRIDGE] prompt = {prompt}")
-                self._sse_text(f"Prompt: {prompt}\n")
+                # 用代码块包住提示词 → 网页端自带"复制"按钮，可一键复制
+                self._sse_text(f"```提示词\n{prompt}\n```\n\n")
 
                 fpath, fname = generate_image(prompt, params)
 
@@ -395,7 +396,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     host = EXTERNAL_HOST or self.headers.get("Host", f"localhost:{BRIDGE_PORT}")
                     url = f"http://{host}/images/{fname}"
                     self._sse_text(
-                        f"\n✅ 生成完成！ {params['steps']}步 {params['width']}x{params['height']}\n\n"
+                        f"✅ 生成完成 · {params['steps']} 步 · {params['width']}×{params['height']}\n\n"
                         f"{url}\n\n"
                         f"路径: {fpath}"
                     )
@@ -412,8 +413,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 if fpath and fname:
                     host = EXTERNAL_HOST or self.headers.get("Host", f"localhost:{BRIDGE_PORT}")
                     url = f"http://{host}/images/{fname}"
-                    text = (f"🎨 图片已生成！\nPrompt: {prompt}\n"
-                            f"{params['steps']}步 {params['width']}x{params['height']}\n\n{url}")
+                    text = (f"🎨 图片已生成\n\n```提示词\n{prompt}\n```\n\n"
+                            f"{params['steps']} 步 · {params['width']}×{params['height']}\n\n{url}")
                 else:
                     text = "❌ 生成失败"
 
