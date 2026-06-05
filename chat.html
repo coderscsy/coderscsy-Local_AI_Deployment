@@ -145,7 +145,10 @@ body.touch .msg-copy{opacity:.55}
   <div class="chat" id="chat"></div>
 
   <div class="input-area">
+    <div class="img-preview" id="imgPreview"></div>
     <div class="input-row">
+      <button class="att-btn" id="attBtn" onclick="attachImg()" title="图片 / 拍照（需视觉模型）">＋</button>
+      <input type="file" id="fileIn" accept="image/*" style="display:none">
       <textarea id="input" rows="1" placeholder="输入消息...  含'画/生成'自动生图" oninput="autoH(this)" onkeydown="onKey(event)"></textarea>
       <button class="send-btn" id="sendBtn" onclick="onSend()">↑</button>
     </div>
@@ -161,6 +164,8 @@ const sendBtn = document.getElementById('sendBtn');
 const statusEl = document.getElementById('status');
 const modelSel = document.getElementById('modelSel');
 const ctxSel = document.getElementById('ctxSel');
+const fileIn = document.getElementById('fileIn');
+const imgPreview = document.getElementById('imgPreview');
 const chatList = document.getElementById('chatList');
 const sidebarEl = document.getElementById('sidebar');
 
@@ -241,7 +246,8 @@ function saveMessage(role, content) {
   chats[currentChatId].messages.push({role, content});
   // 用第一条用户消息做标题
   if (role === 'user' && chats[currentChatId].title === '新对话') {
-    chats[currentChatId].title = content.substring(0, 30);
+    const t = (typeof content === 'string' ? content : contentText(content)) || '[图片]';
+    chats[currentChatId].title = t.substring(0, 30);
   }
   chats[currentChatId].updated = Date.now();
   saveChats(chats);
@@ -370,11 +376,25 @@ function msgFoot(withTime) {
   return '<div class="msg-foot"><button class="msg-copy" title="复制" aria-label="复制">' + COPY_SVG + '</button>'
        + (withTime ? '<span class="msg-time">' + now() + '</span>' : '') + '</div>';
 }
+// 消息内容可能是字符串，或视觉消息的数组 [{type:'text'...},{type:'image_url'...}]
+function contentText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.filter(p => p && p.type === 'text').map(p => p.text || '').join(' ');
+  return '';
+}
+function contentHTML(role, content) {
+  let imgs = '';
+  if (Array.isArray(content)) content.forEach(p => {
+    if (p && p.type === 'image_url') { const u = p.image_url && (p.image_url.url || p.image_url); if (u) imgs += '<img class="up-img" loading="lazy" src="' + u + '" onclick="window.open(this.src)">'; }
+  });
+  const text = contentText(content);
+  return imgs + (role === 'user' ? esc(text) : renderContent(text));
+}
 function buildMsg(role, content, withTime) {
   const div = document.createElement('div');
   div.className = 'msg ' + (role === 'user' ? 'user' : 'ai');
-  div.__raw = content;                                  // 复制按钮用：保存原始文本（非渲染后的 HTML）
-  div.innerHTML = '<div class="bubble">' + (role === 'user' ? esc(content) : renderContent(content)) + '</div>' + msgFoot(withTime);
+  div.__raw = contentText(content);                    // 复制按钮用：取文本部分
+  div.innerHTML = '<div class="bubble">' + contentHTML(role, content) + '</div>' + msgFoot(withTime);
   return div;
 }
 
@@ -425,6 +445,34 @@ modelSel.addEventListener('change', () => { try { localStorage.setItem('model', 
 ctxSel.value = localStorage.getItem('ctx') || '';                                                                    // 恢复上下文长度选择
 ctxSel.addEventListener('change', () => { try { localStorage.setItem('ctx', ctxSel.value); } catch(e) {} });
 
+// ===== 图片上传 / 拍照（发给视觉模型）=====
+let pendingImg = null;
+function attachImg() { fileIn.click(); }                 // 手机上会弹出"拍照/相册"选项
+fileIn.onchange = () => {
+  const f = fileIn.files && fileIn.files[0]; fileIn.value = '';
+  if (!f) return;
+  const fr = new FileReader();
+  fr.onload = () => downscaleImg(fr.result, 1024, (u) => { pendingImg = u; renderImgPreview(); });
+  fr.readAsDataURL(f);
+};
+function downscaleImg(dataUrl, max, cb) {                 // 压到最长边 max，避免几 MB 的原图拖慢请求
+  const im = new Image();
+  im.onload = () => {
+    let w = im.width, h = im.height;
+    if (Math.max(w, h) > max) { const s = max / Math.max(w, h); w = Math.round(w*s); h = Math.round(h*s); }
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    try { c.getContext('2d').drawImage(im, 0, 0, w, h); cb(c.toDataURL('image/jpeg', 0.85)); }
+    catch(e) { cb(dataUrl); }
+  };
+  im.onerror = () => cb(dataUrl);
+  im.src = dataUrl;
+}
+function renderImgPreview() {
+  imgPreview.innerHTML = pendingImg
+    ? '<div class="pv"><img src="' + pendingImg + '"><span class="rm" onclick="clearPendingImg()">×</span></div>' : '';
+}
+function clearPendingImg() { pendingImg = null; renderImgPreview(); }
+
 function setApi() {
   const v = prompt('API 地址:', API);
   if (v && v.trim()) {
@@ -461,7 +509,7 @@ function finishAi(aiDiv, bubble, fullText, finishReason, aborted) {
 
 async function send() {
   const text = inputEl.value.trim();
-  if (!text || generating) return;
+  if ((!text && !pendingImg) || generating) return;
   if (!modelSel.value) { toast('模型未就绪：请确认 LM Studio 已加载模型'); return; }
 
   generating = true;
@@ -469,17 +517,20 @@ async function send() {
   setSendStop(true);
   inputEl.value = '';
   inputEl.style.height = 'auto';
+  const img = pendingImg; pendingImg = null; renderImgPreview();
+  // 带图片时用 OpenAI 视觉格式（需 LM Studio 加载视觉模型）
+  const content = img ? [{type: 'text', text: text}, {type: 'image_url', image_url: {url: img}}] : text;
 
   // 如果没有当前对话，创建一个
   if (!currentChatId) newChat();
 
   // 用户消息
-  const userDiv = buildMsg('user', text, true);
+  const userDiv = buildMsg('user', content, true);
   const w = chatEl.querySelector('.welcome');
   if (w) w.remove();
   chatEl.appendChild(userDiv);
   scrollEnd();
-  saveMessage('user', text);
+  saveMessage('user', content);
 
   // typing
   const typingDiv = document.createElement('div');

@@ -143,6 +143,16 @@ def extract_user_message(messages):
     return ""
 
 
+def has_image_input(messages):
+    """最近一条用户消息是否带上传图片（视觉请求）——若是则不走画图、直接转发给视觉模型。"""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            c = msg.get("content")
+            return isinstance(c, list) and any(
+                isinstance(p, dict) and p.get("type") == "image_url" for p in c)
+    return False
+
+
 def is_image_request(text):
     low = text.lower()
     if "create a simple and clear title" in low or "generate a title" in low:
@@ -362,7 +372,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         print(f"\n  [IN] stream={is_stream}")
         print(f"  [IN] msg = {last_msg}")
 
-        if is_image_request(last_msg):
+        if is_image_request(last_msg) and not has_image_input(messages):   # 带上传图片=视觉请求，不画图，转发给模型
             print(f"  [BRIDGE] 🎨 Image!")
 
             params = parse_params(last_msg)
