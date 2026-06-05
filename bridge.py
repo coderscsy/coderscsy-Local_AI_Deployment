@@ -274,26 +274,39 @@ class BridgeHandler(BaseHTTPRequestHandler):
         ts = int(time.time())
         cid = f"chatcmpl-{ts}"
         self._sse = {"ts": ts, "cid": cid, "model": model}
+        self._client_gone = False            # 客户端断开标志：任一 SSE 写失败即置 True，上层据此短路
         self._sse_chunk({"role": "assistant"})
 
     def _sse_text(self, text):
         for i in range(0, len(text), 100):
+            if self._client_gone:            # 已断开就别再切片写了
+                return
             self._sse_chunk({"content": text[i:i+100]})
 
     def _sse_chunk(self, delta):
         s = self._sse
         obj = {"id": s["cid"], "object": "chat.completion.chunk", "created": s["ts"],
                "model": s["model"], "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
-        self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
-        self.wfile.flush()
+        try:
+            self.wfile.write(f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode())
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+            self._client_gone = True         # 客户端已断开：标记后让上层停止后续写入，避免 BrokenPipe 冒泡崩线程
+            print(f"  [SSE] 客户端断开: {e}")
 
     def _sse_end(self):
+        if self._client_gone:
+            return
         s = self._sse
         end = {"id": s["cid"], "object": "chat.completion.chunk", "created": s["ts"],
                "model": s["model"], "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
-        self.wfile.write(f"data: {json.dumps(end)}\n\n".encode())
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+        try:
+            self.wfile.write(f"data: {json.dumps(end)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+            self._client_gone = True
+            print(f"  [SSE] 客户端断开(end): {e}")
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -394,6 +407,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 # 用代码块包住提示词 → 网页端自带"复制"按钮，可一键复制
                 self._sse_text(f"```提示词\n{prompt}\n```\n\n")
 
+                if self._client_gone:                      # 翻译耗时后用户已点终止：别再白跑 Draw Things
+                    print("  [BRIDGE] 客户端已断开，跳过图片生成")
+                    return
+
                 fpath, fname = generate_image(prompt, params)
 
                 if fpath and fname:
@@ -432,6 +449,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         else:
             print(f"  [BRIDGE] 💬 -> LM Studio")
             headers_sent = False
+            resp = None
             def _open():
                 req = urllib.request.Request(
                     f"{LM_STUDIO_HOST}/v1/chat/completions",
@@ -474,11 +492,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
                     line = resp.readline()
                     if not line:
                         break
-                    self.wfile.write(line)
-                    self.wfile.flush()
+                    try:
+                        self.wfile.write(line)
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                        print("  [BRIDGE] 转发时客户端断开，停止从上游读取")
+                        break                              # 客户端没了就别再拉 LM Studio 了
                     if is_stream and line.strip() == b"data: [DONE]":   # 结束标记：立即收尾，不再死等连接关闭
                         break
-                resp.close()
             except Exception as e:
                 code = getattr(e, "code", None)        # HTTPError 自带 .code/.read()，含 LM Studio 的真实报错原因
                 detail = getattr(e, "_detail", None)   # 重试路径已读过 body，优先复用，避免二次 read 读空
@@ -501,6 +522,12 @@ class BridgeHandler(BaseHTTPRequestHandler):
                             self.wfile.write(b)
                         else:
                             self._send({"error": str(e)}, 500)
+                    except Exception:
+                        pass
+            finally:
+                if resp is not None:                       # 无论成功/出错/断开，都关掉到 LM Studio 的连接，避免连接泄漏/占用导致下一条消息无响应
+                    try:
+                        resp.close()
                     except Exception:
                         pass
 

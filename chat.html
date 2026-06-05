@@ -494,12 +494,12 @@ function finishAi(aiDiv, bubble, fullText, finishReason, aborted) {
   if (shown) {
     bubble.innerHTML = renderContent(shown);
     if (aborted)
-      bubble.insertAdjacentHTML('beforeend', '<div style="color:#f59e0b;font-size:12px;margin-top:6px">⏹ 已终止生成</div>');
+      bubble.insertAdjacentHTML('beforeend', '<div style="color:#f59e0b;font-size:12px;margin-top:6px">⏹ 已终止生成（本段不计入上下文）</div>');
     else if (finishReason === 'length')
       bubble.insertAdjacentHTML('beforeend', '<div style="color:#f59e0b;font-size:12px;margin-top:6px">⚠️ 已达长度/上下文上限，回复被截断——请在 LM Studio 调大 Context Length</div>');
     aiDiv.__raw = shown;
     aiDiv.insertAdjacentHTML('beforeend', msgFoot(true));
-    if (clean) saveMessage('assistant', clean);   // 只把干净正文写入上下文；只有思考没正文则不写入
+    if (clean && !aborted) saveMessage('assistant', clean);   // 干净正文才写入上下文；终止的半截内容不写入，避免污染下一轮
   } else {
     bubble.innerHTML = aborted ? '⏹ 已终止' : '⚠️ 模型未返回任何内容';
   }
@@ -538,7 +538,22 @@ async function send() {
   chatEl.appendChild(typingDiv);
   scrollEnd();
 
-  const allMsgs = getCurrentMessages();
+  // 兜底清洗（不改存储，只清理本次要发送的上下文）：①空内容 assistant；②被中途终止残留的「图片生成」半截文案
+  // （以占位语开头、又没"✅ 生成完成"标记）——避免脏上下文导致模型回空，也能自愈旧会话里已存的污染
+  const allMsgs = getCurrentMessages().filter(m => {
+    if (m.role !== 'assistant') return true;
+    const t = (contentText(m.content) || '').trim();
+    if (!t) return false;
+    if (t.startsWith('🎨 正在生成图片') && !t.includes('✅ 生成完成')) return false;
+    return true;
+  });
+
+  // #5：注入一条 system 指令——让模型把"可用于绘画的提示词"单独放进 ``` 代码块，
+  // 这样就复用代码块自带的「复制」按钮，可一键复制（图片生成路径已在用这套渲染）。
+  const sendMsgs = [
+    {role: 'system', content: '当你输出可用于 AI 绘画的提示词(prompt)时，请把该提示词单独放进一个 ``` 代码块里，方便用户一键复制；其余说明文字照常输出即可。'},
+    ...allMsgs
+  ];
 
   let aiDiv = null, bubble = null, fullText = '', finishReason = null;
   try {
@@ -546,7 +561,7 @@ async function send() {
       method: 'POST',
       signal: abortCtrl.signal,
       headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer lm-studio'},
-      body: JSON.stringify({model: modelSel.value, messages: allMsgs, temperature: 0.7, stream: true, ...(ctxSel.value ? {context_length: +ctxSel.value} : {})})
+      body: JSON.stringify({model: modelSel.value, messages: sendMsgs, temperature: 0.7, stream: true, ...(ctxSel.value ? {context_length: +ctxSel.value} : {})})
     });
     if (!res.ok) {
       let detail = '';
@@ -630,6 +645,20 @@ async function send() {
   renderChatList();
   renderMessages();
   if (window.innerWidth <= 600) sidebarEl.classList.add('hidden');
+
+  // 移动端软键盘适配：iOS Safari 不支持 viewport 的 interactive-widget、100dvh 也不随键盘收缩，
+  // 底部输入栏会被键盘盖住。用 visualViewport 把 body 高度实时设为可视高度，让输入栏顶在键盘上方。
+  // Android(Chrome) 已由 interactive-widget=resizes-content 处理，这里幂等、无副作用。
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const fitKeyboard = () => {
+      document.body.style.height = vv.height + 'px';
+      if (vv.offsetTop) window.scrollTo(0, 0);   // iOS 键盘把布局视口顶上去时复位，避免顶部留白
+    };
+    vv.addEventListener('resize', fitKeyboard);
+    vv.addEventListener('scroll', fitKeyboard);
+    fitKeyboard();
+  }
 })();
 </script>
 </body>
